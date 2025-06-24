@@ -4,7 +4,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from sqlalchemy.engine import Result
-from core.models import db_helper, User, Profile, Post
+from urllib3.poolmanager import key_fn_by_scheme
+
+from core.models import (
+    db_helper,
+    User,
+    Profile,
+    Post,
+    Order,
+    Product,
+    OrderProductAssociation,
+)
 from sqlalchemy.orm import joinedload, selectinload
 
 
@@ -130,7 +140,129 @@ async def get_profiles_with_user_and_user_with_posts(session: AsyncSession):
         print(profile.user.posts)
 
 
-async def main():
+async def create_order(session: AsyncSession, promocode: str | None = None) -> Order:
+    order = Order(promocode=promocode)
+    session.add(order)
+    await session.commit()
+    return order
+
+
+async def create_product(
+    session: AsyncSession,
+    name: str,
+    description: str,
+    price: int,
+) -> Product:
+    product = Product(
+        name=name,
+        description=description,
+        price=price,
+    )
+    session.add(product)
+    await session.commit()
+    return product
+
+
+async def create_products_and_products(session: AsyncSession):
+    order_one = await create_order(session)
+    order_promo = await create_order(session, promocode="promo")
+
+    mouse = await create_product(
+        session,
+        "mouse",
+        "Grate mouse",
+        2000,
+    )
+    keyboard = await create_product(
+        session,
+        "keyboard",
+        "Grate keyboard",
+        5000,
+    )
+    display = await create_product(
+        session,
+        "display",
+        "Office display",
+        10000,
+    )
+    order_one = await session.scalar(
+        select(Order)
+        .where(Order.id == order_one.id)
+        .options(
+            selectinload(Order.products),
+        ),
+        options=(selectinload(Order.products),),
+    )
+    order_promo = await session.scalar(
+        select(Order)
+        .where(Order.id == order_promo.id)
+        .options(
+            selectinload(Order.products),
+        ),
+        options=(selectinload(Order.products),),
+    )
+    order_one.products.append(mouse)
+    order_one.products.append(keyboard)
+    # order_promo.products.append(keyboard)
+    # order_promo.products.append(display)
+    order_promo.products = [keyboard, display]
+    await session.commit()
+
+
+async def get_orders_with_products(session: AsyncSession) -> list[Order]:
+    stmt = (
+        select(Order)
+        .options(
+            selectinload(Order.products),
+        )
+        .order_by(Order.id)
+    )
+    orders = await session.scalars(stmt)
+
+    return list(orders)
+
+
+async def demo_get_orders_with_products_through_secondary(session: AsyncSession):
+    orders = await get_orders_with_products(session)
+    for order in orders:
+        print(order.id, order.promocode, order.created_at, "products: ")
+        for product in order.products:
+            print("-", product.id, product.name, product.price)
+
+
+async def get_orders_with_products_assoc(session: AsyncSession) -> list[Order]:
+    stmt = (
+        select(Order)
+        .options(
+            selectinload(Order.products_details).joinedload(
+                OrderProductAssociation.product
+            )
+        )
+        .order_by(Order.id)
+    )
+    orders = await session.scalars(stmt)
+
+    return list(orders)
+
+
+async def demo_get_orders_with_products_with_assoc(session: AsyncSession):
+    orders = await get_orders_with_products_assoc(session)
+
+    for order in orders:
+        print(order.id, order.promocode, order.created_at, "products:")
+        for (
+            order_product_details
+        ) in order.products_details:  # type: OrderProductAssociation
+            print(
+                "-",
+                order_product_details.product.name,
+                order_product_details.product.price,
+                "qty:",
+                order_product_details.quantity,
+            )
+
+
+async def main_relations(session: AsyncSession):
     async with db_helper.session_factory() as session:
         # # await create_user(session=session, username="john")
         # await create_user(session=session, username="Bob")
@@ -172,6 +304,18 @@ async def main():
         # await get_posts_with_authors(session=session)
         # await get_users_with_post_and_profiles(session=session)
         await get_profiles_with_user_and_user_with_posts(session=session)
+
+
+async def demo_m2m(session: AsyncSession):
+    await create_products_and_products(session)
+    # await demo_get_orders_with_products_through_secondary(session)
+    await demo_get_orders_with_products_with_assoc(session)
+
+
+async def main():
+    async with db_helper.session_factory() as session:
+        await demo_m2m(session)
+        # await main_relations(session)
 
 
 if __name__ == "__main__":
